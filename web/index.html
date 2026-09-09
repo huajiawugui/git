@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>鱼群智联 · 仿生鱼数字孪生</title>
+<style>
+  :root {
+    --panel-bg: rgba(8, 20, 40, 0.82);
+    --accent: #4fc3f7;
+    --ok: #66e07c;
+    --warn: #ff5252;
+    --amber: #ffb74d;
+    --text: #dbe9f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #06131f;
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif; color: var(--text); }
+  #scene { position: fixed; inset: 0; display: block; }
+
+  /* ===== HUD(左上) ===== */
+  #hud {
+    position: fixed; top: 12px; left: 12px; z-index: 10;
+    background: var(--panel-bg); border-radius: 10px; padding: 12px 16px;
+    border: 1px solid rgba(79,195,247,.25); min-width: 210px; user-select: none;
+  }
+  .hud-title { font-size: 15px; font-weight: bold; color: var(--accent); margin-bottom: 8px; letter-spacing: 1px; }
+  .hud-row { display: flex; gap: 14px; margin: 4px 0; }
+  .hud-item { display: flex; flex-direction: column; min-width: 52px; }
+  .hud-label { font-size: 11px; color: #8fb3d1; }
+  .hud-val { font-size: 15px; font-weight: bold; }
+  #hudDist { color: var(--ok); font-size: 17px; }
+  #hudDist.warn { color: var(--warn); animation: blink .5s infinite; }
+  @keyframes blink { 50% { opacity: .35; } }
+  #warnTag {
+    display: none; margin-top: 8px; padding: 5px 10px; border-radius: 6px;
+    background: rgba(255,82,82,.18); border: 1px solid var(--warn);
+    color: var(--warn); font-size: 13px; font-weight: bold; text-align: center;
+  }
+  #warnTag.show { display: block; animation: blink .5s infinite; }
+
+  /* ===== 控制面板(右侧) ===== */
+  #panelBtn {
+    position: fixed; top: 12px; right: 12px; z-index: 20; width: 38px; height: 38px;
+    border-radius: 8px; border: 1px solid rgba(79,195,247,.35); background: var(--panel-bg);
+    color: var(--accent); font-size: 18px; cursor: pointer;
+  }
+  #panel {
+    position: fixed; top: 12px; right: 12px; bottom: 12px; z-index: 15;
+    width: 264px; overflow-y: auto; background: var(--panel-bg);
+    border: 1px solid rgba(79,195,247,.25); border-radius: 10px; padding: 14px;
+    transition: transform .25s ease; user-select: none;
+  }
+  #panel.hidden { transform: translateX(calc(100% + 20px)); }
+  .p-title { font-size: 14px; font-weight: bold; color: var(--accent); margin-bottom: 10px; }
+  .p-section { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px dashed rgba(143,179,209,.25); }
+  .p-section:last-child { border-bottom: none; }
+  .s-title { font-size: 12px; color: #8fb3d1; margin-bottom: 8px; }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 12px; font-weight: bold;
+  }
+  .badge.demo { background: rgba(255,183,77,.15); color: var(--amber); border: 1px solid var(--amber); }
+  .badge.live { background: rgba(102,224,124,.15); color: var(--ok); border: 1px solid var(--ok); }
+  .badge.conn { background: rgba(79,195,247,.15); color: var(--accent); border: 1px solid var(--accent); }
+  #connInfo { font-size: 11px; color: #7f9db8; margin-top: 6px; line-height: 1.5; }
+  .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  button.act {
+    padding: 8px 4px; border-radius: 7px; border: 1px solid rgba(79,195,247,.4);
+    background: rgba(79,195,247,.12); color: var(--text); font-size: 12.5px; cursor: pointer;
+  }
+  button.act:hover { background: rgba(79,195,247,.28); }
+  button.act.on { background: rgba(102,224,124,.22); border-color: var(--ok); color: #d3f8da; }
+  button.act.wide { grid-column: 1 / -1; }
+  .slider-row { margin: 7px 0; }
+  .slider-row label { display: flex; justify-content: space-between; font-size: 12px; color: #a9c6dd; }
+  .slider-row label b { color: var(--accent); font-weight: bold; }
+  input[type=range] { width: 100%; margin-top: 3px; accent-color: #4fc3f7; }
+  #demoSec { opacity: .95; }
+  #demoSec.off { display: none; }
+  .hint { font-size: 11px; color: #6f8fa8; line-height: 1.6; margin-top: 4px; }
+
+  /* ===== 底部提示 ===== */
+  #footer {
+    position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%); z-index: 10;
+    font-size: 11px; color: #7f9db8; background: rgba(8,20,40,.6);
+    padding: 4px 14px; border-radius: 12px; white-space: nowrap;
+  }
+
+  @media (max-width: 640px) {
+    #panel { top: auto; bottom: 0; left: 0; right: 0; width: 100%; max-height: 46%;
+      border-radius: 12px 12px 0 0; }
+    #hud { transform: scale(.88); transform-origin: top left; }
+    #footer { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="hud">
+  <div class="hud-title">🐟 鱼群智联 · 数字孪生</div>
+  <div class="hud-row">
+    <div class="hud-item"><span class="hud-label">前方距离</span><span id="hudDist">-- cm</span></div>
+    <div class="hud-item"><span class="hud-label">泳姿</span><span id="hudGait" class="hud-val">待机</span></div>
+    <div class="hud-item"><span class="hud-label">帧率</span><span id="hudFps" class="hud-val">60</span></div>
+  </div>
+  <div class="hud-row">
+    <div class="hud-item"><span class="hud-label">尾鳍</span><span id="hudS0" class="hud-val">90°</span></div>
+    <div class="hud-item"><span class="hud-label">中段</span><span id="hudS1" class="hud-val">90°</span></div>
+    <div class="hud-item"><span class="hud-label">头部</span><span id="hudS2" class="hud-val">90°</span></div>
+  </div>
+  <div id="warnTag">⚠ 前方障碍 · 自动避障中</div>
+</div>
+
+<button id="panelBtn" title="显示/隐藏控制面板">⚙</button>
+
+<div id="panel">
+  <div class="p-title">⚙ 控制面板</div>
+
+  <div class="p-section">
+    <div class="s-title">连接状态</div>
+    <span id="connBadge" class="badge demo">演示模式</span>
+    <div id="connInfo">未连接 ESP32,当前由内置模拟器驱动。<br>连接 ESP32 热点(192.168.4.1)后自动切换实时模式。</div>
+  </div>
+
+  <div class="p-section">
+    <div class="s-title">泳姿控制(按键 1~6)</div>
+    <div class="btn-grid">
+      <button class="act" data-gait="S">1 · S 形前进</button>
+      <button class="act" data-gait="C_L">2 · C 形左转</button>
+      <button class="act" data-gait="C_R">3 · C 形右转</button>
+      <button class="act" data-gait="CPG_F">4 · CPG 前进</button>
+      <button class="act" data-gait="CPG_B">5 · CPG 后退</button>
+      <button class="act" data-gait="STOP">6 · 停止回中</button>
+    </div>
+    <div class="hint">S 形为波动前进;C 形为一次性转向;CPG 由中枢模式发生器产生连续波动,可在线调参。</div>
+  </div>
+
+  <div class="p-section">
+    <div class="s-title">CPG 参数(拖动实时生效)</div>
+    <div class="slider-row"><label>摆动频率 <b id="vW">2.5</b></label><input type="range" id="cpgW" min="0.5" max="6" step="0.1" value="2.5"></div>
+    <div class="slider-row"><label>摆动幅度 <b id="vAmp">25°</b></label><input type="range" id="cpgAmp" min="5" max="40" step="1" value="25"></div>
+    <div class="slider-row"><label>转向偏置 <b id="vBias">0°</b></label><input type="range" id="cpgBias" min="-20" max="20" step="1" value="0"></div>
+    <div class="hint">频率=游速;幅度=摆尾大小;偏置=连续转向(正=左偏,负=右偏)。</div>
+  </div>
+
+  <div class="p-section">
+    <div class="s-title">手动舵机(直接驱动关节)</div>
+    <div class="slider-row"><label>尾鳍 <b id="vS0">90°</b></label><input type="range" id="srv0" min="60" max="120" step="1" value="90"></div>
+    <div class="slider-row"><label>中段 <b id="vS1">90°</b></label><input type="range" id="srv1" min="60" max="120" step="1" value="90"></div>
+    <div class="slider-row"><label>头部 <b id="vS2">90°</b></label><input type="range" id="srv2" min="60" max="120" step="1" value="90"></div>
+    <div class="hint">实时模式下滑杆指令经 WiFi 下发给 ESP32。</div>
+  </div>
+
+  <div class="p-section" id="demoSec">
+    <div class="s-title">模拟距离(仅演示模式)</div>
+    <div class="slider-row"><label>前方距离 <b id="vDist">40 cm</b></label><input type="range" id="distS" min="3" max="80" step="1" value="40"></div>
+    <button class="act wide" id="btnObstacle">🚧 模拟障碍物(&lt;5cm 触发避障)</button>
+    <div class="hint">实时模式下距离来自 GP2Y0A21YK0F 红外传感器。</div>
+  </div>
+</div>
+
+<div id="footer">连接 ESP32 热点 FishBuoy(密码 12345678)后访问 192.168.4.1 进入实时数字孪生 · 鼠标拖动旋转视角 / 滚轮缩放</div>
+
+<script src="three.min.js"></script>
+<script>
+"use strict";
+/* =====================================================================
+ * 鱼群智联 · 仿生鱼数字孪生(M1:纯网页离线演示版)
+ * 泳姿参数表与 firmware/gait.cpp、firmware/cpg.cpp 完全一致,见 docs/泳姿数据库.md
+ * ===================================================================== */
+
+/* ================= 0. 配置 ================= */
+var CFG = {
+  WS_PORT: 81,                       // ESP32 WebSocket 端口
+  OBSTACLE_TRIGGER_CM: 5,            // 避障触发距离
+  OBSTACLE_RELEASE_CM: 8,            // 避障解除距离(滞回)
+  JOINT_GAIN: [1.0, 0.6, 0.3],       // 尾/中/头 3D 关节增益
+  TAIL_FIN_GAIN: 1.4,                // 尾鳍相对尾段放大
+  SERVO_MIN: 60, SERVO_MAX: 120,     // 舵机限幅
+  SMOOTH: 0.22,                      // 3D 关节平滑系数
+  DEMO_SWIM_SPEED: 0.10,             // DEMO 椭圆游动角速度 rad/s
+  DEMO_TURN_SPEED: 1.35              // C 形转向角速度 rad/s
+};
+
+/* ================= 1. 泳姿数据库(与固件共用) =================
+ * 舵机顺序:[尾, 中, 头],90° 为中位。
+ * S_MOVE:θi(k) = 90 + Ai·sin(2πk/12 + φi),A=[30,20,10],φ=[+120°,+60°,0°]
+ *         (头领先、波向尾传播,尾滞后头 120°——与真实鱼类游动一致)
+ * C_MOVE:6 步渐弯 + 4 步保持 + 6 步回正,向一侧弯曲形成 C 形
+ */
+var GAIT_S_MOVE = [
+  [116,107,90],[105,110,95],[90,107,99],[75,100,100],[64,90,99],[60,80,95],
+  [64,73,90],[75,70,85],[90,73,81],[105,80,80],[116,90,81],[120,100,85]
+];
+var GAIT_C_LEFT = [
+  [90,90,90],[84,86,88],[78,82,86],[72,78,84],[66,74,82],[60,70,80],
+  [60,70,80],[60,70,80],[60,70,80],[60,70,80],
+  [66,74,82],[72,78,84],[78,82,86],[84,86,88],[90,90,90],[90,90,90]
+];
+var GAIT_C_RIGHT = [
+  [90,90,90],[96,94,92],[102,98,94],[108,102,96],[114,106,98],[120,110,100],
+  [120,110,100],[120,110,100],[120,110,100],[120,110,100],
+  [114,106,98],[108,102,96],[102,98,94],[96,94,92],[90,90,90],[90,90,90]
+];
+var GAIT_NAMES = { IDLE:"待机", S:"S 形前进", C_L:"C 形左转", C_R:"C 形右转",
+                   CPG:"CPG 波动", MANUAL:"手动", AVOID:"自动避障" };
+
+/* ================= 2. CPG 中枢模式发生器(移植自 RoFish) =================
+ * 相位方程:sA_d[i] = W + Σ w[i][j]·sr[j]·sin(sA[j]-sA[i]-phi[i][j])
+ * 幅值/偏置二阶临界阻尼收敛到目标值;输出 out = sx + sr·sin(sA)(rad)
+ */
+function makeCPG() {
+  return {
+    W: 2.5,            // 频率 rad/s
+    ampDeg: 25,        // 幅值(度,由滑杆设定)
+    biasDeg: 0,        // 偏置(度,转向)
+    forward: true,
+    ar: 20, ax: 20,    // 收敛系数
+    w: [[0,5,5],[5,0,5],[5,5,0]],                                  // 耦合权重 1/s
+    phiF: [[0,0.71,1.41],[-0.71,0,0.71],[-1.41,-0.71,0]],          // 前进相位偏置(头领先,波向尾传播)
+    phiB: [[0,-0.71,-1.41],[0.71,0,-0.71],[1.41,0.71,0]],          // 后退相位偏置(反向)
+    sA: [0,0,0], sr: [0.1,0.1,0.1], sx: [0,0,0], srD: [0,0,0], sxD: [0,0,0],
+    step: function (dt) {
+      var phi = this.forward ? this.phiF : this.phiB;
+      var cR = this.ampDeg * Math.PI / 180;
+      var cX = this.biasDeg * Math.PI / 180;
+      var sA_new = [], sr_new = [], sx_new = [], srD_new = [], sxD_new = [];
+      for (var i = 0; i < 3; i++) {
+        var sA_d = this.W;
+        for (var j = 0; j < 3; j++) {
+          sA_d += this.w[i][j] * this.sr[j] * Math.sin(this.sA[j] - this.sA[i] - phi[i][j]);
+        }
+        sA_new[i] = this.sA[i] + sA_d * dt;
+        var sr_dd = this.ar * ((this.ar / 4) * (cR - this.sr[i]) - this.srD[i]);
+        srD_new[i] = this.srD[i] + sr_dd * dt;
+        sr_new[i] = this.sr[i] + this.srD[i] * dt;
+        var sx_dd = this.ax * ((this.ax / 4) * (cX - this.sx[i]) - this.sxD[i]);
+        sxD_new[i] = this.sxD[i] + sx_dd * dt;
+        sx_new[i] = this.sx[i] + this.sxD[i] * dt;
+      }
+      this.sA = sA_new; this.sr = sr_new; this.sx = sx_new;
+      this.srD = srD_new; this.sxD = sxD_new;
+      var out = [];
+      for (i = 0; i < 3; i++) {
+        var deg = (this.sx[i] + this.sr[i] * Math.sin(this.sA[i])) * 180 / Math.PI;
+        out.push(clamp(Math.round(90 + deg), CFG.SERVO_MIN, CFG.SERVO_MAX));
+      }
+      return out;
+    }
+  };
+}
+
+/* ================= 3. 泳姿引擎(非阻塞状态机,与固件同构) ================= */
+var Engine = {
+  mode: "IDLE", resumeMode: "IDLE",
+  stepIndex: 0, nextStepTime: 0, stepMs: 50,
+  cpg: makeCPG(),
+  avoidCooldownUntil: 0, avoidLatched: false,
+  servo: [90, 90, 90],
+  distCm: 40,
+
+  command: function (g) {
+    if (g === "S")       { this.mode = "S";    this.stepIndex = 0; this.stepMs = 50; this.nextStepTime = 0; }
+    else if (g === "C_L"){ this.mode = "C_L";  this.stepIndex = 0; this.stepMs = 80; this.nextStepTime = 0; }
+    else if (g === "C_R"){ this.mode = "C_R";  this.stepIndex = 0; this.stepMs = 80; this.nextStepTime = 0; }
+    else if (g === "CPG_F"){ this.cpg.forward = true;  this.mode = "CPG"; }
+    else if (g === "CPG_B"){ this.cpg.forward = false; this.mode = "CPG"; }
+    else if (g === "STOP"){ this.mode = "IDLE"; this.servo = [90,90,90]; }
+    else if (g === "MANUAL"){ this.mode = "MANUAL"; }
+  },
+
+  update: function (now, dt) {
+    if (WSC.live) return this.servo;   // 实时模式:舵机由遥测数据驱动,本地引擎只做演示动画
+
+    /* —— 避障检测(滞回:5cm 触发 / 8cm 解除) —— */
+    var d = this.distCm;
+    if (this.mode !== "AVOID" && d > 0 && d < CFG.OBSTACLE_TRIGGER_CM &&
+        now > this.avoidCooldownUntil && !this.avoidLatched) {
+      this.resumeMode = (this.mode === "C_L" || this.mode === "C_R") ? "IDLE" : this.mode;
+      this.mode = "AVOID"; this.stepIndex = 0; this.stepMs = 80; this.nextStepTime = 0;
+      this.avoidLatched = true;
+    }
+    if (this.mode === "AVOID" && d > CFG.OBSTACLE_RELEASE_CM) this.avoidLatched = false;
+
+    if (this.mode === "S" || this.mode === "C_L" || this.mode === "C_R" || this.mode === "AVOID") {
+      var table = (this.mode === "S") ? GAIT_S_MOVE :
+                  (this.mode === "C_R") ? GAIT_C_RIGHT : GAIT_C_LEFT;
+      if (now >= this.nextStepTime) {
+        this.servo = table[this.stepIndex].slice();
+        this.stepIndex++;
+        this.nextStepTime = now + this.stepMs;
+        if (this.stepIndex >= table.length) {
+          this.stepIndex = 0;
+          if (this.mode === "C_L" || this.mode === "C_R") {
+            this.mode = "IDLE";               // C 形转向为一次性动作
+          } else if (this.mode === "AVOID") {
+            this.mode = this.resumeMode;      // 避障结束恢复原泳姿
+            this.avoidCooldownUntil = now + 2000;
+          }
+        }
+      }
+    } else if (this.mode === "CPG") {
+      var acc = 0;
+      while (acc < dt) { this.servo = this.cpg.step(Math.min(0.01, dt - acc)); acc += 0.01; }
+    } else if (this.mode === "IDLE") {
+      this.servo = [90, 90, 90];
+    }
+    /* MANUAL 模式由滑杆直接写 this.servo */
+    return this.servo;
+  }
+};
+
+/* ================= 4. three.js 场景 ================= */
+var canvas = document.getElementById("scene");
+var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputEncoding = THREE.sRGBEncoding;
+
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a2a4a);
+scene.fog = new THREE.Fog(0x0a2a4a, 12, 46);
+
+var camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
+var camTarget = new THREE.Vector3(0, 0.2, 0);       // 跟随鱼
+var orbit = { radius: 8.2, theta: -0.35, phi: 1.02 }; // 方位角/俯仰角
+
+var hemi = new THREE.HemisphereLight(0xbfd9ff, 0x3a4a3a, 0.85);
+scene.add(hemi);
+var sun = new THREE.DirectionalLight(0xfff2cc, 1.15);
+sun.position.set(6, 12, 4);
+scene.add(sun);
+var amb = new THREE.AmbientLight(0x33445e, 0.7);
+scene.add(amb);
+
+/* 水底 */
+var sand = new THREE.Mesh(
+  new THREE.PlaneGeometry(80, 60),
+  new THREE.MeshLambertMaterial({ color: 0xcbb887 })
+);
+sand.rotation.x = -Math.PI / 2; sand.position.y = -2.6;
+scene.add(sand);
+
+/* 水面 */
+var water = new THREE.Mesh(
+  new THREE.PlaneGeometry(80, 60),
+  new THREE.MeshPhongMaterial({ color: 0x4a8fd4, transparent: true, opacity: 0.32,
+                                side: THREE.DoubleSide, shininess: 60 })
+);
+water.rotation.x = -Math.PI / 2; water.position.y = 3.1;
+scene.add(water);
+
+/* 礁石 */
+function addRock(x, z, s, color) {
+  var g = new THREE.DodecahedronGeometry(s, 0);
+  var m = new THREE.MeshLambertMaterial({ color: color });
+  var rock = new THREE.Mesh(g, m);
+  rock.position.set(x, -2.6 + s * 0.45, z);
+  rock.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+  scene.add(rock);
+  return rock;
+}
+[[-9, 5, 1.1, 0x6b6f75], [7, -6, 0.9, 0x77766b], [10, 3, 1.3, 0x5f6a72],
+ [-6, -8, 1.0, 0x6e6a5e], [12, -2, 0.7, 0x7a7468], [4, 9, 0.8, 0x666d75],
+ [-13, 0, 1.2, 0x6f726a], [0, -12, 0.9, 0x647078]].forEach(function (r) {
+  addRock(r[0], r[1], r[2], r[3]);
+});
+
+/* 海草(摇曳) */
+var weeds = [];
+for (var wi = 0; wi < 14; wi++) {
+  var weed = new THREE.Mesh(
+    new THREE.ConeGeometry(0.12, 1.4 + Math.random() * 1.0, 6),
+    new THREE.MeshLambertMaterial({ color: 0x2f7d4f })
+  );
+  weed.position.set((Math.random() - 0.5) * 30, -2.6 + 0.6, (Math.random() - 0.5) * 22);
+  weed.phase = Math.random() * 6.28;
+  scene.add(weed); weeds.push(weed);
+}
+
+/* 浮游粒子 */
+var partGeo = new THREE.BufferGeometry();
+var partPos = new Float32Array(260 * 3);
+for (var pi = 0; pi < 260; pi++) {
+  partPos[pi * 3]     = (Math.random() - 0.5) * 26;
+  partPos[pi * 3 + 1] = (Math.random() - 0.5) * 5;
+  partPos[pi * 3 + 2] = (Math.random() - 0.5) * 20;
+}
+partGeo.setAttribute("position", new THREE.BufferAttribute(partPos, 3));
+var partMat = new THREE.PointsMaterial({ color: 0xdfefff, size: 0.07, transparent: true, opacity: 0.55 });
+var particles = new THREE.Points(partGeo, partMat);
+scene.add(particles);
+
+/* 水面浮标(呼应项目主题) */
+var buoy = new THREE.Group();
+var buoyBody = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.75, 12),
+  new THREE.MeshLambertMaterial({ color: 0xd94f3d }));
+buoyBody.position.y = 3.05;
+var buoyTop = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.55, 12),
+  new THREE.MeshLambertMaterial({ color: 0x2b6b9e }));
+buoyTop.position.y = 3.7;
+var buoyMast = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 6),
+  new THREE.MeshLambertMaterial({ color: 0xcccccc }));
+buoyMast.position.y = 4.2;
+buoy.add(buoyBody, buoyTop, buoyMast);
+scene.add(buoy);
+
+/* 系绳(浮标 → 鱼头) */
+var tetherGeo = new THREE.BufferGeometry();
+tetherGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+var tether = new THREE.Line(tetherGeo, new THREE.LineBasicMaterial({ color: 0x88aacc, transparent: true, opacity: 0.5 }));
+scene.add(tether);
+
+/* ================= 5. 程序化鱼模型(4 段躯干 + 尾鳍,3 关节) =================
+ * 鱼头朝向 +X;关节绕 Y 轴旋转;舵机 90° = 3D 0°
+ */
+var fish = new THREE.Group();          // 整鱼:位置 + 朝向
+var bodyRoot = new THREE.Group();      // 游动起伏
+fish.add(bodyRoot);
+
+var MAT = {
+  head: new THREE.MeshPhongMaterial({ color: 0x8fb4d8, shininess: 80 }),
+  seg1: new THREE.MeshPhongMaterial({ color: 0x7ba7cf, shininess: 80 }),
+  seg2: new THREE.MeshPhongMaterial({ color: 0x6b9bc6, shininess: 80 }),
+  seg3: new THREE.MeshPhongMaterial({ color: 0x5e8fbc, shininess: 80 }),
+  fin:  new THREE.MeshPhongMaterial({ color: 0xc96a4a, shininess: 40, side: THREE.DoubleSide }),
+  dark: new THREE.MeshPhongMaterial({ color: 0x4a6a8a, side: THREE.DoubleSide }),
+  eye:  new THREE.MeshPhongMaterial({ color: 0x14181f, shininess: 90 }),
+  glint:new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 100 })
+};
+
+function segMesh(r, sx, sy, sz, mat, xOff) {
+  var m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), mat);
+  m.scale.set(sx, sy, sz);
+  m.position.x = xOff;
+  return m;
+}
+
+/* 层级:每段 group 位于关节枢轴处,网格位于枢轴后方 */
+var headGroup = new THREE.Group(); bodyRoot.add(headGroup);
+headGroup.add(segMesh(0.30, 1.15, 0.62, 0.50, MAT.head, 0.28));
+/* 眼睛 */
+[[0.38, 0.12, 0.16], [0.38, 0.12, -0.16]].forEach(function (p) {
+  var eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), MAT.eye);
+  eye.position.set(p[0], p[1], p[2]); headGroup.add(eye);
+  var gl = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), MAT.glint);
+  gl.position.set(p[0] + 0.02, p[1] + 0.02, p[2]); headGroup.add(gl);
+});
+
+var joint2 = new THREE.Group(); joint2.position.x = -0.08; bodyRoot.add(joint2);
+var seg1Group = new THREE.Group(); joint2.add(seg1Group);
+seg1Group.add(segMesh(0.28, 0.95, 0.55, 0.45, MAT.seg1, -0.30));
+/* 胸鳍 ×2 */
+[[-0.10, 0.05, 0.30], [-0.10, 0.05, -0.30]].forEach(function (p, idx) {
+  var pfin = new THREE.Mesh(new THREE.ConeGeometry(0.20, 0.03, 4), MAT.fin);
+  pfin.geometry.rotateY(Math.PI / 4);
+  pfin.position.set(p[0], p[1], p[2]);
+  pfin.name = "pectoral" + idx;
+  seg1Group.add(pfin);
+});
+
+var joint1 = new THREE.Group(); joint1.position.x = -0.58; bodyRoot.add(joint1);
+var seg2Group = new THREE.Group(); joint1.add(seg2Group);
+seg2Group.add(segMesh(0.25, 0.90, 0.48, 0.38, MAT.seg2, -0.28));
+/* 背鳍 */
+var dfin = new THREE.Mesh(new THREE.BufferGeometry(), MAT.dark);
+var dVerts = new Float32Array([-0.10,0.26,0, -0.42,0.46,0, -0.66,0.26,0]);
+dfin.geometry.setAttribute("position", new THREE.BufferAttribute(dVerts, 3));
+seg2Group.add(dfin);
+
+var joint0 = new THREE.Group(); joint0.position.x = -0.86; bodyRoot.add(joint0);
+var seg3Group = new THREE.Group(); joint0.add(seg3Group);
+seg3Group.add(segMesh(0.22, 0.85, 0.40, 0.32, MAT.seg3, -0.24));
+
+var tailPivot = new THREE.Group(); tailPivot.position.x = -1.10; bodyRoot.add(tailPivot);
+var tailFinGroup = new THREE.Group(); tailPivot.add(tailFinGroup);
+var tailFin = new THREE.Mesh(new THREE.BufferGeometry(), MAT.fin);
+var tVerts = new Float32Array([0,0.10,0, 0,0.42,0, -0.55,0.02,0, 0,-0.24,0, -0.55,-0.02,0]);
+tailFin.geometry.setAttribute("position", new THREE.BufferAttribute(tVerts, 3));
+tailFin.geometry.setIndex([0,1,2, 0,2,3, 0,3,4]);
+tailFinGroup.add(tailFin);
+
+scene.add(fish);
+
+var joint3DGroups = [joint0, joint1, joint2];   // 对应舵机 [尾,中,头]
+var cur3D = [0, 0, 0];                          // 当前 3D 关节角(度,平滑后)
+
+/* ================= 6. WebSocket 客户端 ================= */
+var WSC = {
+  ws: null, live: false, attempt: 0, lastRx: 0,
+  pingTimer: null, recTimer: null,
+  telemetry: null,
+
+  start: function () {
+    if (location.protocol === "file:") { setConn("demo"); return; }  // 本地文件:纯演示
+    this.connect();
+  },
+
+  connect: function () {
+    var host = location.hostname || "192.168.4.1";
+    try { this.ws = new WebSocket("ws://" + host + ":" + CFG.WS_PORT); }
+    catch (e) { this.ws = null; }
+    if (!this.ws) { this.scheduleRetry(); return; }
+    setConn("conn");
+
+    this.ws.onopen = function () {
+      WSC.live = true; WSC.attempt = 0; WSC.lastRx = Date.now();
+      setConn("live");
+      WSC.send({ t: "cmd", v: 1, cmd: "status" });
+      WSC.pingTimer = setInterval(function () { WSC.send({ t: "ping", v: 1 }); }, 5000);
+    };
+    this.ws.onmessage = function (ev) {
+      WSC.lastRx = Date.now();
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.t === "tele") {
+        WSC.telemetry = msg;
+        if (msg.servo && msg.servo.length === 3) {
+          var liveServo = msg.servo;
+          Engine.mode = msg.gait === "C_L" ? "C_L" : msg.gait === "C_R" ? "C_R"
+                      : (msg.gait === "CPG" ? "CPG" : msg.gait === "S" ? "S" : Engine.mode);
+          Engine.servo = liveServo.slice();
+        }
+        if (typeof msg.dist_cm === "number") Engine.distCm = msg.dist_cm;
+      } else if (msg.t === "event" && msg.evt === "obstacle") {
+        flashWarn();
+      }
+    };
+    this.ws.onclose = function () { WSC.cleanup(); WSC.scheduleRetry(); };
+    this.ws.onerror = function () { try { WSC.ws.close(); } catch (e) {} };
+  },
+
+  scheduleRetry: function () {
+    this.live = false;
+    setConn("demo");
+    var delay = Math.min(15000, 2000 * Math.pow(2, this.attempt++));
+    clearTimeout(this.recTimer);
+    this.recTimer = setTimeout(function () { WSC.connect(); }, delay);
+  },
+
+  cleanup: function () {
+    clearInterval(this.pingTimer);
+  },
+
+  send: function (obj) {
+    if (this.live && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(obj));
+      return true;
+    }
+    return false;
+  }
+};
+
+function setConn(state) {
+  var badge = document.getElementById("connBadge");
+  var info = document.getElementById("connInfo");
+  if (state === "live") {
+    badge.className = "badge live"; badge.textContent = "● 实时连接";
+    info.textContent = "已连接 ESP32,遥测与指令经 WiFi 实时传输。";
+  } else if (state === "conn") {
+    badge.className = "badge conn"; badge.textContent = "◌ 连接中";
+    info.textContent = "正在连接 ws://" + (location.hostname || "192.168.4.1") + ":" + CFG.WS_PORT + " ...";
+  } else {
+    badge.className = "badge demo"; badge.textContent = "▶ 演示模式";
+    info.textContent = "未连接 ESP32,当前由内置模拟器驱动。连接 ESP32 热点(FishBuoy)后访问 192.168.4.1 自动切换实时模式。";
+  }
+}
+
+function flashWarn() {
+  var w = document.getElementById("warnTag");
+  w.classList.add("show");
+  setTimeout(function () { w.classList.remove("show"); }, 2000);
+}
+
+/* ================= 7. 控制面板绑定 ================= */
+function bindPanel() {
+  /* 泳姿按钮 */
+  var buttons = document.querySelectorAll("button[data-gait]");
+  function gaitPress(g) {
+    buttons.forEach(function (b) { b.classList.remove("on"); });
+    var map = { S: "S", C_L: "C_L", C_R: "C_R", CPG_F: "CPG_F", CPG_B: "CPG_B", STOP: "STOP" };
+    Engine.command(map[g]);
+    if (g !== "STOP") buttons.forEach(function (b) {
+      if (b.dataset.gait === g || (g === "CPG_B" && b.dataset.gait === "CPG_F") ||
+          (g === "CPG_F" && b.dataset.gait === "CPG_B")) b.classList.add("on");
+    });
+    var wire = { S: "S", C_L: "C_L", C_R: "C_R", STOP: "stop" };
+    if (g === "CPG_F" || g === "CPG_B") {
+      Engine.cpg.forward = (g === "CPG_F");
+      WSC.send({ t: "cmd", v: 1, cmd: "gait", gait: "CPG", dir: g === "CPG_F" ? "fwd" : "back" });
+    } else if (wire[g]) {
+      WSC.send({ t: "cmd", v: 1, cmd: wire[g] === "stop" ? "stop" : "gait", gait: wire[g] });
+    }
+    WSC.send({ t: "cmd", v: 1, cmd: "cpg", W: Engine.cpg.W,
+               amp: Engine.cpg.ampDeg, bias: Engine.cpg.biasDeg, pb: 0.7 });
+  }
+  buttons.forEach(function (b) {
+    b.addEventListener("click", function () { gaitPress(b.dataset.gait); });
+  });
+  window.addEventListener("keydown", function (e) {
+    var k = ["1", "2", "3", "4", "5", "6"];
+    var g = ["S", "C_L", "C_R", "CPG_F", "CPG_B", "STOP"];
+    var idx = k.indexOf(e.key);
+    if (idx >= 0 && !e.target.tagName.match(/INPUT|TEXTAREA/)) gaitPress(g[idx]);
+  });
+
+  /* CPG 滑杆 */
+  bindSlider("cpgW", function (v) { Engine.cpg.W = v; return v.toFixed(1); },
+    function (v) { WSC.send({ t: "cmd", v: 1, cmd: "cpg", W: v, amp: Engine.cpg.ampDeg, bias: Engine.cpg.biasDeg, pb: 0.7 }); });
+  bindSlider("cpgAmp", function (v) { Engine.cpg.ampDeg = v; return v + "°"; },
+    function (v) { WSC.send({ t: "cmd", v: 1, cmd: "cpg", W: Engine.cpg.W, amp: v, bias: Engine.cpg.biasDeg, pb: 0.7 }); });
+  bindSlider("cpgBias", function (v) { Engine.cpg.biasDeg = v; return v + "°"; },
+    function (v) { WSC.send({ t: "cmd", v: 1, cmd: "cpg", W: Engine.cpg.W, amp: Engine.cpg.ampDeg, bias: v, pb: 0.7 }); });
+
+  /* 手动舵机滑杆 */
+  for (var s = 0; s < 3; s++) {
+    (function (id) {
+      bindSlider("srv" + id, function (v) {
+        Engine.command("MANUAL");
+        Engine.servo[id] = v;
+        return v + "°";
+      }, function (v) {
+        WSC.send({ t: "cmd", v: 1, cmd: "servo", id: id, angle: v });
+      });
+    })(s);
+  }
+
+  /* 模拟距离 */
+  bindSlider("distS", function (v) {
+    Engine.distCm = v;
+    return v + " cm";
+  }, null);
+  document.getElementById("btnObstacle").addEventListener("click", function () {
+    var slider = document.getElementById("distS");
+    var old = Engine.distCm;
+    Engine.distCm = 4;
+    slider.value = 4; document.getElementById("vDist").textContent = "4 cm";
+    setTimeout(function () {
+      Engine.distCm = old;
+      slider.value = old; document.getElementById("vDist").textContent = old + " cm";
+    }, 2500);
+  });
+
+  /* 面板开关 */
+  document.getElementById("panelBtn").addEventListener("click", function () {
+    document.getElementById("panel").classList.toggle("hidden");
+  });
+}
+
+function bindSlider(id, onInput, onLive) {
+  var el = document.getElementById(id);
+  var labelId = id === "distS" ? "vDist" : ("v" + (id.indexOf("srv") === 0 ? "S" : "") + id.slice(3));
+  var label = document.getElementById(labelId);
+  var timer = null;
+  el.addEventListener("input", function () {
+    var v = parseFloat(el.value);
+    label.textContent = onInput(v);
+    clearTimeout(timer);
+    timer = setTimeout(function () { if (onLive) onLive(v); }, 120);  // 松开 120ms 后下发
+  });
+}
+
+/* ================= 8. 相机轨道控制(鼠标/触摸) ================= */
+function bindOrbit() {
+  var dragging = false, lastX = 0, lastY = 0, pinchDist = 0;
+  canvas.addEventListener("mousedown", function (e) { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+  window.addEventListener("mouseup", function () { dragging = false; });
+  window.addEventListener("mousemove", function (e) {
+    if (!dragging) return;
+    orbit.theta -= (e.clientX - lastX) * 0.005;
+    orbit.phi   -= (e.clientY - lastY) * 0.005;
+    orbit.phi = clamp(orbit.phi, 0.25, 1.45);
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  canvas.addEventListener("wheel", function (e) {
+    orbit.radius = clamp(orbit.radius * (1 + e.deltaY * 0.001), 4, 16);
+    e.preventDefault();
+  }, { passive: false });
+
+  /* 触摸:单指旋转,双指缩放 */
+  var touches = [];
+  canvas.addEventListener("touchstart", function (e) { touches = e.touches; }, { passive: true });
+  canvas.addEventListener("touchmove", function (e) {
+    e.preventDefault();
+    if (e.touches.length === 1 && touches.length >= 1) {
+      orbit.theta -= (e.touches[0].clientX - touches[0].clientX) * 0.006;
+      orbit.phi   -= (e.touches[0].clientY - touches[0].clientY) * 0.006;
+      orbit.phi = clamp(orbit.phi, 0.25, 1.45);
+    } else if (e.touches.length === 2) {
+      var d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                         e.touches[0].clientY - e.touches[1].clientY);
+      if (pinchDist > 0) orbit.radius = clamp(orbit.radius * pinchDist / d, 4, 16);
+      pinchDist = d;
+    }
+    touches = e.touches;
+  }, { passive: false });
+  canvas.addEventListener("touchend", function () { pinchDist = 0; });
+}
+
+/* ================= 9. HUD 更新 ================= */
+var hudGaitMap = { IDLE: "待机", S: "S 形前进", C_L: "C 形左转", C_R: "C 形右转",
+                   CPG: "CPG 波动", MANUAL: "手动", AVOID: "自动避障" };
+
+function updateHUD() {
+  var distEl = document.getElementById("hudDist");
+  if (Engine.distCm > 0) {
+    distEl.textContent = Engine.distCm + " cm";
+    distEl.classList.toggle("warn", Engine.distCm < CFG.OBSTACLE_TRIGGER_CM);
+  } else {
+    distEl.textContent = "-- cm";
+  }
+  document.getElementById("hudGait").textContent = hudGaitMap[Engine.mode] || "待机";
+  document.getElementById("hudS0").textContent = Engine.servo[0] + "°";
+  document.getElementById("hudS1").textContent = Engine.servo[1] + "°";
+  document.getElementById("hudS2").textContent = Engine.servo[2] + "°";
+  var warnEl = document.getElementById("warnTag");
+  var liveObstacle = WSC.live && WSC.telemetry && WSC.telemetry.obstacle === true;
+  var showWarn = Engine.mode === "AVOID" || liveObstacle;
+  if (showWarn && !warnEl.classList.contains("show")) warnEl.classList.add("show");
+  else if (!showWarn && warnEl.classList.contains("show")) warnEl.classList.remove("show");
+  /* 实时模式下距离滑杆显示真实值 */
+  if (WSC.live && typeof Engine.distCm === "number") {
+    var ds = document.getElementById("distS");
+    if (document.activeElement !== ds) {
+      ds.value = clamp(Math.round(Engine.distCm), 3, 80);
+      document.getElementById("vDist").textContent = Engine.distCm + " cm";
+    }
+  }
+}
+
+/* ================= 10. 主循环 ================= */
+function clamp(x, lo, hi) { return x < lo ? lo : (x > hi ? hi : x); }
+
+var fishAlpha = 0;          // 椭圆路径角度
+var fishHeading = 0;        // 当前朝向
+var turning = 0;            // C 形转向残留旋转
+var bobPhase = 0;
+var lastT = performance.now();
+var fpsAcc = 0, fpsFrames = 0;
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  var dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
+
+  /* —— 泳姿引擎 —— */
+  Engine.update(now, dt);
+
+  /* —— 游动路径与转向(仅演示模式语义,实时模式同样驱动 3D 演示) —— */
+  var mode = Engine.mode;
+  if (mode === "C_L" || mode === "C_R") {          // 原地转向
+    turning = (mode === "C_L" ? 1 : -1) * CFG.DEMO_TURN_SPEED * dt;
+    fishHeading += turning;
+  } else if (mode === "AVOID") {
+    fishHeading += CFG.DEMO_TURN_SPEED * dt;       // 避障向左
+  } else {
+    var sp = (mode === "S") ? CFG.DEMO_SWIM_SPEED : (mode === "CPG") ? CFG.DEMO_SWIM_SPEED * 0.7 : 0;
+    fishAlpha += sp * dt;
+    var A = 7.5, B = 4.2;
+    var px = A * Math.sin(fishAlpha), pz = B * Math.cos(fishAlpha);
+    var tx = A * Math.cos(fishAlpha), tz = -B * Math.sin(fishAlpha);
+    var tangentHeading = Math.atan2(tz, tx) * -1;
+    if (sp > 0) fishHeading = tangentHeading;
+    fish.position.set(px, 0, pz);
+    fish.rotation.y = fishHeading;
+  }
+  fish.rotation.y = fishHeading;
+
+  /* —— 3D 关节角度(舵机 → 3D,平滑插值) —— */
+  var jv = Engine.servo;
+  for (var j = 0; j < 3; j++) {
+    var targetDeg = (jv[j] - 90) * CFG.JOINT_GAIN[j];
+    cur3D[j] += (targetDeg - cur3D[j]) * CFG.SMOOTH;
+  }
+  joint3DGroups[0].rotation.y = THREE.MathUtils.degToRad(cur3D[0]);
+  joint3DGroups[1].rotation.y = THREE.MathUtils.degToRad(cur3D[1]);
+  joint3DGroups[2].rotation.y = THREE.MathUtils.degToRad(cur3D[2]);
+  tailFinGroup.rotation.y = THREE.MathUtils.degToRad(cur3D[0] * (CFG.TAIL_FIN_GAIN - 1));
+
+  /* —— 起伏、胸鳍、海草、粒子、浮标 —— */
+  bobPhase += dt * (mode === "IDLE" ? 0.6 : 2.4);
+  bodyRoot.position.y = Math.sin(bobPhase) * 0.09;
+  bodyRoot.rotation.z = Math.sin(bobPhase * 0.6) * 0.03;
+  var flap = Math.sin(bobPhase * 2) * 0.25;
+  seg1Group.children.forEach(function (c) {
+    if (c.name && c.name.indexOf("pectoral") === 0) c.rotation.z = flap;
+  });
+  weeds.forEach(function (w) {
+    w.rotation.z = Math.sin(now * 0.0016 + w.phase) * 0.07;
+  });
+  var pp = particles.geometry.attributes.position.array;
+  for (var k = 0; k < pp.length; k += 3) {
+    pp[k + 1] += Math.sin(now * 0.0005 + pp[k] * 0.4) * 0.0009;
+  }
+  particles.geometry.attributes.position.needsUpdate = true;
+  buoy.position.y = Math.sin(now * 0.0012) * 0.12;
+
+  /* —— 系绳:浮标底 → 鱼头(6 单位内可见) —— */
+  var fishHead = new THREE.Vector3(0.32, 0.15, 0);
+  bodyRoot.localToWorld(fishHead);
+  var distToBuoy = Math.hypot(fishHead.x, fishHead.z);
+  if (distToBuoy < 6) {
+    tether.visible = true;
+    var tp = tether.geometry.attributes.position.array;
+    tp[0] = 0; tp[1] = 2.75; tp[2] = 0;
+    tp[3] = fishHead.x; tp[4] = fishHead.y; tp[5] = fishHead.z;
+    tether.geometry.attributes.position.needsUpdate = true;
+  } else {
+    tether.visible = false;
+  }
+
+  /* —— 相机跟随 —— */
+  camTarget.lerp(fish.position.clone().setY(0.15), 0.06);
+  var cp = new THREE.Vector3(
+    camTarget.x + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta),
+    camTarget.y + orbit.radius * Math.cos(orbit.phi),
+    camTarget.z + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta)
+  );
+  camera.position.copy(cp);
+  camera.lookAt(camTarget);
+
+  /* —— HUD / 帧率 —— */
+  updateHUD();
+  fpsAcc += dt; fpsFrames++;
+  if (fpsAcc >= 0.5) {
+    document.getElementById("hudFps").textContent = Math.round(fpsFrames / fpsAcc);
+    fpsAcc = 0; fpsFrames = 0;
+  }
+
+  renderer.render(scene, camera);
+}
+
+/* ================= 启动 ================= */
+window.addEventListener("resize", function () {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+bindPanel();
+bindOrbit();
+WSC.start();
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
