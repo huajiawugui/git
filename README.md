@@ -51,10 +51,15 @@ FishBuoy/
 ### M2 — 硬件联调
 
 1. 按下方清单采购硬件,按接线表组装(舵机**严禁**由 USB 口供电)
-2. Arduino IDE 2.x → 首选项附加开发板地址 `https://espressif.github.io/arduino-esp32/package_esp32_index.json` → 安装 "esp32 by Espressif Systems"
-3. 打开 `firmware/firmware.ino`,开发板选 "ESP32 Dev Module",Partition Scheme 选带 LittleFS 的 4MB 方案
-4. 工具 → ESP32 Sketch Data Upload(安装 LittleFS 上传插件后)烧录 `firmware/data/`
-5. 串口监视器 115200 波特率查看遥测,按 docs/标定记录.md 完成红外两点标定
+2. **ESP32 板级包已预装**:esp32@2.0.17 + 工具链已放入 `%LOCALAPPDATA%\Arduino15`(含 esptool、mklittlefs,经国内可达通道下载)。安装 Arduino IDE 2.x 后无需再装板级包,直接打开工程即可;命令行编译:`C:\Users\Ausa\arduino-cli\arduino-cli.exe compile --fqbn esp32:esp32:esp32 firmware`
+3. 打开 `firmware/firmware.ino`,开发板选 "ESP32 Dev Module",Partition Scheme 选 `Default 4MB with spiffs (1.2MB APP/1.5MB SPIFFS)`(LittleFS 挂载于该分区)
+4. 烧录 `firmware/data/` 到 LittleFS(免插件,用已预装工具):
+   ```
+   %LOCALAPPDATA%\Arduino15\packages\esp32\tools\mklittlefs\3.0.0-gnu12-dc7f933\mklittlefs.exe -c data -p 256 -b 4096 -s 1507328 littlefs.bin
+   %LOCALAPPDATA%\Arduino15\packages\esp32\tools\esptool_py\4.5.1\esptool.exe --chip esp32 --port COM3 write_flash 0x290000 littlefs.bin
+   ```
+   (COM3 换成实际串口号;`0x290000` 为上述分区方案中 SPIFFS 分区地址)
+5. 串口监视器 115200 波特率查看遥测;红外接好后把 `firmware/config.h` 的 `SIM_SENSOR` 改为 `0`,按 docs/标定记录.md 完成两点标定
 
 ### M3 — WiFi 数字孪生
 
