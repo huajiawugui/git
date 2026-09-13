@@ -101,6 +101,7 @@
   <div class="hud-title">🐟 鱼群智联 · 数字孪生</div>
   <div class="hud-row">
     <div class="hud-item"><span class="hud-label">前方距离</span><span id="hudDist">-- cm</span></div>
+    <div class="hud-item"><span class="hud-label">深度</span><span id="hudDepth" class="hud-val">--</span></div>
     <div class="hud-item"><span class="hud-label">泳姿</span><span id="hudGait" class="hud-val">待机</span></div>
     <div class="hud-item"><span class="hud-label">帧率</span><span id="hudFps" class="hud-val">60</span></div>
   </div>
@@ -137,6 +138,18 @@
   </div>
 
   <div class="p-section">
+    <div class="s-title">深度与自动巡游(按键 7~9)</div>
+    <div class="btn-grid">
+      <button class="act" data-gait="RISE">7 · 上浮(按住)</button>
+      <button class="act" data-gait="DIVE">8 · 下潜(按住)</button>
+      <button class="act wide" data-gait="AUTO">9 · 自动巡游 开/关</button>
+    </div>
+    <div class="slider-row"><label>巡游范围(水平半径) <b id="vAutoR">8 m</b></label><input type="range" id="autoR" min="3" max="12" step="0.5" value="8"></div>
+    <div class="slider-row"><label>巡游深度(自水面向下) <b id="vAutoD">4.5 m</b></label><input type="range" id="autoD" min="1" max="4.5" step="0.1" value="4.5"></div>
+    <div class="hint">按住 7/8 键或按钮上浮/下潜,松开即停;按 9 开启自动巡游:鱼在范围内随机游动并优先前往未访问区域,一段时间后遍历整个水体空间(半透明框为巡游范围)。</div>
+  </div>
+
+  <div class="p-section">
     <div class="s-title">CPG 参数(拖动实时生效)</div>
     <div class="slider-row"><label>摆动频率 <b id="vW">2.5</b></label><input type="range" id="cpgW" min="0.5" max="6" step="0.1" value="2.5"></div>
     <div class="slider-row"><label>摆动幅度 <b id="vAmp">25°</b></label><input type="range" id="cpgAmp" min="5" max="40" step="1" value="25"></div>
@@ -160,7 +173,7 @@
   </div>
 </div>
 
-<div id="footer">连接 ESP32 热点 FishBuoy(密码 12345678)后访问 192.168.4.1 进入实时数字孪生 · 鼠标拖动旋转视角 / 滚轮缩放</div>
+<div id="footer">连接 ESP32 热点 FishBuoy(密码 12345678)后访问 192.168.4.1 进入实时数字孪生 · 鼠标拖动旋转视角 / 滚轮缩放 · 按键 1~9 控制泳姿/深度/巡游</div>
 
 <script src="three.min.js"></script>
 <script>
@@ -179,8 +192,17 @@ var CFG = {
   TAIL_FIN_GAIN: 1.4,                // 尾鳍相对尾段放大
   SERVO_MIN: 60, SERVO_MAX: 120,     // 舵机限幅
   SMOOTH: 0.22,                      // 3D 关节平滑系数
-  DEMO_SWIM_SPEED: 0.10,             // DEMO 椭圆游动角速度 rad/s
-  DEMO_TURN_SPEED: 1.35              // C 形转向角速度 rad/s
+  DEMO_SWIM_SPEED: 0.8,              // S/CPG 前进速度(单位/s)
+  DEMO_TURN_SPEED: 1.35,             // C 形转向角速度 rad/s
+  RISE_SPEED: 0.55,                  // 上浮/下潜垂直速度(单位/s)
+  AUTO_SPEED: 0.85,                  // 自动巡游巡航速度
+  AUTO_TURN_RATE: 1.4,               // 自动巡游最大转向角速度 rad/s
+  AUTO_VERT_SPEED: 0.6,              // 自动巡游最大垂直速度
+  AUTO_Y_MAX: 2.6,                   // 巡游上界(近水面)
+  WATER_Y: 3.1,                      // 水面高度(深度 HUD 基准)
+  FISH_X_MIN: -13, FISH_X_MAX: 13,   // 游动水平界限
+  FISH_Z_MIN: -10, FISH_Z_MAX: 10,
+  FISH_Y_MIN: -2.1, FISH_Y_MAX: 2.7  // 游动深度界限(沙底/水面)
 };
 
 /* ================= 1. 泳姿数据库(与固件共用) =================
@@ -204,7 +226,8 @@ var GAIT_C_RIGHT = [
   [114,106,98],[108,102,96],[102,98,94],[96,94,92],[90,90,90],[90,90,90]
 ];
 var GAIT_NAMES = { IDLE:"待机", S:"S 形前进", C_L:"C 形左转", C_R:"C 形右转",
-                   CPG:"CPG 波动", MANUAL:"手动", AVOID:"自动避障" };
+                   CPG:"CPG 波动", MANUAL:"手动", AVOID:"自动避障",
+                   AUTO:"自动巡游", RISE:"上浮", DIVE:"下潜" };
 
 /* ================= 2. CPG 中枢模式发生器(移植自 RoFish) =================
  * 相位方程:sA_d[i] = W + Σ w[i][j]·sr[j]·sin(sA[j]-sA[i]-phi[i][j])
@@ -267,7 +290,11 @@ var Engine = {
     else if (g === "CPG_F"){ this.cpg.forward = true;  this.mode = "CPG"; }
     else if (g === "CPG_B"){ this.cpg.forward = false; this.mode = "CPG"; }
     else if (g === "STOP"){ this.mode = "IDLE"; this.servo = [90,90,90]; }
+    else if (g === "IDLE"){ this.mode = "IDLE"; }
     else if (g === "MANUAL"){ this.mode = "MANUAL"; }
+    else if (g === "RISE")  { this.mode = "RISE"; }
+    else if (g === "DIVE")  { this.mode = "DIVE"; }
+    else if (g === "AUTO")  { this.mode = (this.mode === "AUTO") ? "IDLE" : "AUTO"; }
   },
 
   update: function (now, dt) {
@@ -283,9 +310,10 @@ var Engine = {
     }
     if (this.mode === "AVOID" && d > CFG.OBSTACLE_RELEASE_CM) this.avoidLatched = false;
 
-    if (this.mode === "S" || this.mode === "C_L" || this.mode === "C_R" || this.mode === "AVOID") {
-      var table = (this.mode === "S") ? GAIT_S_MOVE :
-                  (this.mode === "C_R") ? GAIT_C_RIGHT : GAIT_C_LEFT;
+    if (this.mode === "S" || this.mode === "C_L" || this.mode === "C_R" || this.mode === "AVOID" ||
+        this.mode === "RISE" || this.mode === "DIVE" || this.mode === "AUTO") {
+      var table = (this.mode === "C_R") ? GAIT_C_RIGHT :
+                  (this.mode === "C_L") ? GAIT_C_LEFT : GAIT_S_MOVE;
       if (now >= this.nextStepTime) {
         this.servo = table[this.stepIndex].slice();
         this.stepIndex++;
@@ -392,25 +420,15 @@ var partMat = new THREE.PointsMaterial({ color: 0xdfefff, size: 0.07, transparen
 var particles = new THREE.Points(partGeo, partMat);
 scene.add(particles);
 
-/* 水面浮标(呼应项目主题) */
-var buoy = new THREE.Group();
-var buoyBody = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.75, 12),
-  new THREE.MeshLambertMaterial({ color: 0xd94f3d }));
-buoyBody.position.y = 3.05;
-var buoyTop = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.55, 12),
-  new THREE.MeshLambertMaterial({ color: 0x2b6b9e }));
-buoyTop.position.y = 3.7;
-var buoyMast = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.7, 6),
-  new THREE.MeshLambertMaterial({ color: 0xcccccc }));
-buoyMast.position.y = 4.2;
-buoy.add(buoyBody, buoyTop, buoyMast);
-scene.add(buoy);
+/* 中央信标已删除:仿生鱼本体即浮漂本体,不再绘制独立浮标与系绳 */
 
-/* 系绳(浮标 → 鱼头) */
-var tetherGeo = new THREE.BufferGeometry();
-tetherGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
-var tether = new THREE.Line(tetherGeo, new THREE.LineBasicMaterial({ color: 0x88aacc, transparent: true, opacity: 0.5 }));
-scene.add(tether);
+/* 巡游范围提示框(仅 AUTO 模式显示,随滑杆更新) */
+var autoBox = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+  new THREE.LineBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.28 })
+);
+autoBox.visible = false;
+scene.add(autoBox);
 
 /* ================= 5. 程序化鱼模型(4 段躯干 + 尾鳍,3 关节) =================
  * 鱼头朝向 +X;关节绕 Y 轴旋转;舵机 90° = 3D 0°
@@ -482,6 +500,7 @@ tailFin.geometry.setIndex([0,1,2, 0,2,3, 0,3,4]);
 tailFinGroup.add(tailFin);
 
 scene.add(fish);
+fish.position.set(0, 1.2, 0);   // 初始位置(水中)
 
 var joint3DGroups = [joint0, joint1, joint2];   // 对应舵机 [尾,中,头]
 var cur3D = [0, 0, 0];                          // 当前 3D 关节角(度,平滑后)
@@ -574,35 +593,66 @@ function flashWarn() {
 }
 
 /* ================= 7. 控制面板绑定 ================= */
+function updateGaitButtons() {
+  document.querySelectorAll("button[data-gait]").forEach(function (b) {
+    var g = b.dataset.gait;
+    var on = (g === "S" && Engine.mode === "S") ||
+             (g === "C_L" && Engine.mode === "C_L") ||
+             (g === "C_R" && Engine.mode === "C_R") ||
+             ((g === "CPG_F" || g === "CPG_B") && Engine.mode === "CPG") ||
+             (g === "RISE" && Engine.mode === "RISE") ||
+             (g === "DIVE" && Engine.mode === "DIVE") ||
+             (g === "AUTO" && Engine.mode === "AUTO");
+    b.classList.toggle("on", on);
+  });
+}
+
 function bindPanel() {
   /* 泳姿按钮 */
   var buttons = document.querySelectorAll("button[data-gait]");
   function gaitPress(g) {
-    buttons.forEach(function (b) { b.classList.remove("on"); });
-    var map = { S: "S", C_L: "C_L", C_R: "C_R", CPG_F: "CPG_F", CPG_B: "CPG_B", STOP: "STOP" };
-    Engine.command(map[g]);
-    if (g !== "STOP") buttons.forEach(function (b) {
-      if (b.dataset.gait === g || (g === "CPG_B" && b.dataset.gait === "CPG_F") ||
-          (g === "CPG_F" && b.dataset.gait === "CPG_B")) b.classList.add("on");
-    });
+    Engine.command(g);
     var wire = { S: "S", C_L: "C_L", C_R: "C_R", STOP: "stop" };
     if (g === "CPG_F" || g === "CPG_B") {
       Engine.cpg.forward = (g === "CPG_F");
       WSC.send({ t: "cmd", v: 1, cmd: "gait", gait: "CPG", dir: g === "CPG_F" ? "fwd" : "back" });
+      WSC.send({ t: "cmd", v: 1, cmd: "cpg", W: Engine.cpg.W,
+                 amp: Engine.cpg.ampDeg, bias: Engine.cpg.biasDeg, pb: 0.7 });
     } else if (wire[g]) {
       WSC.send({ t: "cmd", v: 1, cmd: wire[g] === "stop" ? "stop" : "gait", gait: wire[g] });
     }
-    WSC.send({ t: "cmd", v: 1, cmd: "cpg", W: Engine.cpg.W,
-               amp: Engine.cpg.ampDeg, bias: Engine.cpg.biasDeg, pb: 0.7 });
+    updateGaitButtons();
   }
   buttons.forEach(function (b) {
-    b.addEventListener("click", function () { gaitPress(b.dataset.gait); });
+    var g = b.dataset.gait;
+    if (g === "RISE" || g === "DIVE") {
+      /* 按住上浮/下潜,松开即停 */
+      b.addEventListener("pointerdown", function (e) { e.preventDefault(); Engine.command(g); updateGaitButtons(); });
+      var stopHold = function () { if (Engine.mode === g) { Engine.command("IDLE"); updateGaitButtons(); } };
+      b.addEventListener("pointerup", stopHold);
+      b.addEventListener("pointerleave", stopHold);
+      b.addEventListener("pointercancel", stopHold);
+    } else {
+      b.addEventListener("click", function () { gaitPress(g); });
+    }
   });
+  var keyGaits = { "1": "S", "2": "C_L", "3": "C_R", "4": "CPG_F", "5": "CPG_B",
+                   "6": "STOP", "7": "RISE", "8": "DIVE", "9": "AUTO" };
+  var heldDepth = { "7": false, "8": false };
   window.addEventListener("keydown", function (e) {
-    var k = ["1", "2", "3", "4", "5", "6"];
-    var g = ["S", "C_L", "C_R", "CPG_F", "CPG_B", "STOP"];
-    var idx = k.indexOf(e.key);
-    if (idx >= 0 && !e.target.tagName.match(/INPUT|TEXTAREA/)) gaitPress(g[idx]);
+    var g = keyGaits[e.key];
+    if (g && !e.target.tagName.match(/INPUT|TEXTAREA/)) {
+      if (g === "RISE" || g === "DIVE") heldDepth[e.key] = true;
+      gaitPress(g);
+    }
+  });
+  window.addEventListener("keyup", function (e) {
+    var g = e.key === "7" ? "RISE" : (e.key === "8" ? "DIVE" : null);
+    if (g) heldDepth[e.key] = false;
+    if (g && Engine.mode === g) {
+      Engine.command(heldDepth["7"] ? "RISE" : (heldDepth["8"] ? "DIVE" : "IDLE"));
+      updateGaitButtons();
+    }
   });
 
   /* CPG 滑杆 */
@@ -631,6 +681,11 @@ function bindPanel() {
     Engine.distCm = v;
     return v + " cm";
   }, null);
+
+  /* 自动巡游范围 */
+  bindSlider("autoR", function (v) { updateAutoBounds(); return v + " m"; }, null);
+  bindSlider("autoD", function (v) { updateAutoBounds(); return v + " m"; }, null);
+
   document.getElementById("btnObstacle").addEventListener("click", function () {
     var slider = document.getElementById("distS");
     var old = Engine.distCm;
@@ -650,7 +705,10 @@ function bindPanel() {
 
 function bindSlider(id, onInput, onLive) {
   var el = document.getElementById(id);
-  var labelId = id === "distS" ? "vDist" : ("v" + (id.indexOf("srv") === 0 ? "S" : "") + id.slice(3));
+  var labelId = id === "distS" ? "vDist" :
+                id === "autoR" ? "vAutoR" :
+                id === "autoD" ? "vAutoD" :
+                ("v" + (id.indexOf("srv") === 0 ? "S" : "") + id.slice(3));
   var label = document.getElementById(labelId);
   var timer = null;
   el.addEventListener("input", function () {
@@ -700,7 +758,8 @@ function bindOrbit() {
 
 /* ================= 9. HUD 更新 ================= */
 var hudGaitMap = { IDLE: "待机", S: "S 形前进", C_L: "C 形左转", C_R: "C 形右转",
-                   CPG: "CPG 波动", MANUAL: "手动", AVOID: "自动避障" };
+                   CPG: "CPG 波动", MANUAL: "手动", AVOID: "自动避障",
+                   AUTO: "自动巡游", RISE: "上浮", DIVE: "下潜" };
 
 function updateHUD() {
   var distEl = document.getElementById("hudDist");
@@ -710,6 +769,8 @@ function updateHUD() {
   } else {
     distEl.textContent = "-- cm";
   }
+  var depthM = Math.max(0, CFG.WATER_Y - fish.position.y);
+  document.getElementById("hudDepth").textContent = depthM.toFixed(1) + " m";
   document.getElementById("hudGait").textContent = hudGaitMap[Engine.mode] || "待机";
   document.getElementById("hudS0").textContent = Engine.servo[0] + "°";
   document.getElementById("hudS1").textContent = Engine.servo[1] + "°";
@@ -729,12 +790,94 @@ function updateHUD() {
   }
 }
 
-/* ================= 10. 主循环 ================= */
+/* ================= 10. 自动巡游(AUTO 模式) =================
+ * 随机航点 + 未访问优先:巡游水体被划分为 5×3×4 访问网格,
+ * 每次到达航点后在访问次数最少的格子中随机取新目标,
+ * 保证鱼在一段时间内遍历整个三维巡游空间。
+ */
+var Auto = {
+  bounds: { xMin: -8, xMax: 8, yMin: -1.9, yMax: CFG.AUTO_Y_MAX, zMin: -8, zMax: 8 },
+  target: new THREE.Vector3(2, 0, 1),
+  grid: { nx: 5, ny: 3, nz: 4, counts: new Float32Array(5 * 3 * 4), markT: 0 },
+
+  cellOf: function (p) {
+    var b = this.bounds, g = this.grid;
+    var ix = clamp(Math.floor((p.x - b.xMin) / (b.xMax - b.xMin) * g.nx), 0, g.nx - 1);
+    var iy = clamp(Math.floor((p.y - b.yMin) / (b.yMax - b.yMin) * g.ny), 0, g.ny - 1);
+    var iz = clamp(Math.floor((p.z - b.zMin) / (b.zMax - b.zMin) * g.nz), 0, g.nz - 1);
+    return (iy * g.nz + iz) * g.nx + ix;
+  },
+
+  pickWaypoint: function () {
+    var b = this.bounds, g = this.grid, n = g.counts.length, i;
+    var min = Infinity;
+    for (i = 0; i < n; i++) if (g.counts[i] < min) min = g.counts[i];
+    var cand = [];
+    for (i = 0; i < n; i++) if (g.counts[i] <= min) cand.push(i);
+    var c = cand[(Math.random() * cand.length) | 0];
+    var ix = c % g.nx;
+    var iz = ((c / g.nx) | 0) % g.nz;
+    var iy = ((c / g.nx / g.nz) | 0) % g.ny;
+    this.target.set(
+      b.xMin + (ix + Math.random()) * (b.xMax - b.xMin) / g.nx,
+      b.yMin + (iy + Math.random()) * (b.yMax - b.yMin) / g.ny,
+      b.zMin + (iz + Math.random()) * (b.zMax - b.zMin) / g.nz
+    );
+  },
+
+  update: function (now, dt) {
+    var f = fish.position, tgt = this.target;
+    /* 访问计数:每 0.5s 标记鱼所在格子 */
+    if (now - this.grid.markT > 500) {
+      this.grid.counts[this.cellOf(f)]++;
+      this.grid.markT = now;
+    }
+    /* 到达航点(0.6 单位内)则选取下一目标 */
+    var dx = tgt.x - f.x, dy = tgt.y - f.y, dz = tgt.z - f.z;
+    if (dx * dx + dy * dy + dz * dz < 0.36) this.pickWaypoint();
+    /* 水平转向目标方向(限幅角速度,平滑转弯) */
+    var dXZ = Math.hypot(dx, dz);
+    if (dXZ > 0.01) {
+      var desired = Math.atan2(-dz, dx);
+      var dHead = wrapAngle(desired - fishHeading);
+      var maxTurn = CFG.AUTO_TURN_RATE * dt;
+      fishHeading += clamp(dHead, -maxTurn, maxTurn);
+    }
+    /* 前进 + 垂直升降 */
+    var spd = CFG.AUTO_SPEED * Math.min(1, dXZ / 1.2);
+    f.x += Math.cos(fishHeading) * spd * dt;
+    f.z += -Math.sin(fishHeading) * spd * dt;
+    f.y += clamp(dy, -CFG.AUTO_VERT_SPEED * dt, CFG.AUTO_VERT_SPEED * dt);
+  }
+};
+
+function wrapAngle(a) {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
+/* 巡游范围随滑杆更新(范围改变后重置探索记录) */
+function updateAutoBounds() {
+  var r = parseFloat(document.getElementById("autoR").value);
+  var d = parseFloat(document.getElementById("autoD").value);
+  var b = Auto.bounds;
+  b.xMin = -r; b.xMax = r; b.zMin = -r; b.zMax = r;
+  b.yMax = CFG.AUTO_Y_MAX;
+  b.yMin = Math.max(CFG.FISH_Y_MIN + 0.2, CFG.AUTO_Y_MAX - d);
+  Auto.grid.counts.fill(0);
+  if (Auto.target.x < b.xMin || Auto.target.x > b.xMax ||
+      Auto.target.y < b.yMin || Auto.target.y > b.yMax ||
+      Auto.target.z < b.zMin || Auto.target.z > b.zMax) Auto.pickWaypoint();
+  autoBox.scale.set(b.xMax - b.xMin, b.yMax - b.yMin, b.zMax - b.zMin);
+  autoBox.position.set((b.xMin + b.xMax) / 2, (b.yMin + b.yMax) / 2, (b.zMin + b.zMax) / 2);
+}
+
+/* ================= 11. 主循环 ================= */
 function clamp(x, lo, hi) { return x < lo ? lo : (x > hi ? hi : x); }
 
-var fishAlpha = 0;          // 椭圆路径角度
-var fishHeading = 0;        // 当前朝向
-var turning = 0;            // C 形转向残留旋转
+var fishHeading = 0;        // 当前朝向(弧度)
+var pitch3D = 0;            // 俯仰角(上浮抬头/下潜低头)
 var bobPhase = 0;
 var lastT = performance.now();
 var fpsAcc = 0, fpsFrames = 0;
@@ -747,25 +890,35 @@ function animate(now) {
   /* —— 泳姿引擎 —— */
   Engine.update(now, dt);
 
-  /* —— 游动路径与转向(仅演示模式语义,实时模式同样驱动 3D 演示) —— */
+  /* —— 游动运动学:位置由航向积分,朝向在所有模式间持续有效 ——
+   * (修复:旧版位置由椭圆公式重算,转向后切换泳姿会丢失已转角度) */
   var mode = Engine.mode;
-  if (mode === "C_L" || mode === "C_R") {          // 原地转向
-    turning = (mode === "C_L" ? 1 : -1) * CFG.DEMO_TURN_SPEED * dt;
-    fishHeading += turning;
-  } else if (mode === "AVOID") {
-    fishHeading += CFG.DEMO_TURN_SPEED * dt;       // 避障向左
-  } else {
-    var sp = (mode === "S") ? CFG.DEMO_SWIM_SPEED : (mode === "CPG") ? CFG.DEMO_SWIM_SPEED * 0.7 : 0;
-    fishAlpha += sp * dt;
-    var A = 7.5, B = 4.2;
-    var px = A * Math.sin(fishAlpha), pz = B * Math.cos(fishAlpha);
-    var tx = A * Math.cos(fishAlpha), tz = -B * Math.sin(fishAlpha);
-    var tangentHeading = Math.atan2(tz, tx) * -1;
-    if (sp > 0) fishHeading = tangentHeading;
-    fish.position.set(px, 0, pz);
-    fish.rotation.y = fishHeading;
-  }
+  var turn = 0, fwd = 0, vert = 0;
+  if (mode === "C_L")        { turn = -CFG.DEMO_TURN_SPEED; }      // 原地左转(朝 +Z)
+  else if (mode === "C_R")   { turn = CFG.DEMO_TURN_SPEED; }       // 原地右转(朝 -Z)
+  else if (mode === "AVOID") { turn = -CFG.DEMO_TURN_SPEED; }      // 避障向左
+  else if (mode === "S")     { fwd = CFG.DEMO_SWIM_SPEED; }
+  else if (mode === "CPG")   { fwd = (Engine.cpg.forward ? 1 : -1) * CFG.DEMO_SWIM_SPEED * 0.7; }
+  else if (mode === "RISE")  { vert = CFG.RISE_SPEED; }            // 上浮
+  else if (mode === "DIVE")  { vert = -CFG.RISE_SPEED; }           // 下潜
+  else if (mode === "AUTO")  { Auto.update(now, dt); }
+
+  fishHeading += turn * dt;
+  fish.position.x += Math.cos(fishHeading) * fwd * dt;
+  fish.position.z += -Math.sin(fishHeading) * fwd * dt;
+  if (mode !== "AUTO") fish.position.y += vert * dt;
+  fish.position.x = clamp(fish.position.x, CFG.FISH_X_MIN, CFG.FISH_X_MAX);
+  fish.position.z = clamp(fish.position.z, CFG.FISH_Z_MIN, CFG.FISH_Z_MAX);
+  fish.position.y = clamp(fish.position.y, CFG.FISH_Y_MIN, CFG.FISH_Y_MAX);
   fish.rotation.y = fishHeading;
+
+  /* 俯仰:上浮抬头、下潜低头、巡游随目标深度 */
+  var pitchTarget = 0;
+  if (mode === "RISE") pitchTarget = 0.32;
+  else if (mode === "DIVE") pitchTarget = -0.32;
+  else if (mode === "AUTO") pitchTarget = clamp((Auto.target.y - fish.position.y) * 0.5, -0.4, 0.4);
+  pitch3D += (pitchTarget - pitch3D) * Math.min(1, dt * 4);
+  autoBox.visible = (mode === "AUTO");
 
   /* —— 3D 关节角度(舵机 → 3D,平滑插值) —— */
   var jv = Engine.servo;
@@ -778,10 +931,10 @@ function animate(now) {
   joint3DGroups[2].rotation.y = THREE.MathUtils.degToRad(cur3D[2]);
   tailFinGroup.rotation.y = THREE.MathUtils.degToRad(cur3D[0] * (CFG.TAIL_FIN_GAIN - 1));
 
-  /* —— 起伏、胸鳍、海草、粒子、浮标 —— */
+  /* —— 起伏、俯仰、胸鳍、海草、粒子 —— */
   bobPhase += dt * (mode === "IDLE" ? 0.6 : 2.4);
   bodyRoot.position.y = Math.sin(bobPhase) * 0.09;
-  bodyRoot.rotation.z = Math.sin(bobPhase * 0.6) * 0.03;
+  bodyRoot.rotation.z = pitch3D + Math.sin(bobPhase * 0.6) * 0.03;
   var flap = Math.sin(bobPhase * 2) * 0.25;
   seg1Group.children.forEach(function (c) {
     if (c.name && c.name.indexOf("pectoral") === 0) c.rotation.z = flap;
@@ -794,24 +947,9 @@ function animate(now) {
     pp[k + 1] += Math.sin(now * 0.0005 + pp[k] * 0.4) * 0.0009;
   }
   particles.geometry.attributes.position.needsUpdate = true;
-  buoy.position.y = Math.sin(now * 0.0012) * 0.12;
 
-  /* —— 系绳:浮标底 → 鱼头(6 单位内可见) —— */
-  var fishHead = new THREE.Vector3(0.32, 0.15, 0);
-  bodyRoot.localToWorld(fishHead);
-  var distToBuoy = Math.hypot(fishHead.x, fishHead.z);
-  if (distToBuoy < 6) {
-    tether.visible = true;
-    var tp = tether.geometry.attributes.position.array;
-    tp[0] = 0; tp[1] = 2.75; tp[2] = 0;
-    tp[3] = fishHead.x; tp[4] = fishHead.y; tp[5] = fishHead.z;
-    tether.geometry.attributes.position.needsUpdate = true;
-  } else {
-    tether.visible = false;
-  }
-
-  /* —— 相机跟随 —— */
-  camTarget.lerp(fish.position.clone().setY(0.15), 0.06);
+  /* —— 相机跟随(含深度) —— */
+  camTarget.lerp(fish.position.clone().add(new THREE.Vector3(0, 0.15, 0)), 0.06);
   var cp = new THREE.Vector3(
     camTarget.x + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta),
     camTarget.y + orbit.radius * Math.cos(orbit.phi),
@@ -840,6 +978,9 @@ window.addEventListener("resize", function () {
 
 bindPanel();
 bindOrbit();
+updateAutoBounds();          // 初始化巡游范围(读滑杆默认值)
+Engine.command("AUTO");      // 默认开启自动巡游演示
+updateGaitButtons();
 WSC.start();
 requestAnimationFrame(animate);
 </script>
